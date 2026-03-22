@@ -1,0 +1,14 @@
+{
+  "name": "@cynco/openapi",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cynco REST API OpenAPI specification",
+  "scripts": {
+    "lint": "redocly lint openapi.yaml",
+    "preview": "redocly preview-docs openapi.yaml"
+  },
+  "devDependencies": {
+    "@redocly/cli": "^1.28.0"
+  },
+  "license": "MIT"
+}

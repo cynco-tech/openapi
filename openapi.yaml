@@ -1,0 +1,3736 @@
+openapi: 3.1.0
+info:
+  title: Cynco API
+  version: 1.0.0
+  summary: AI-native business platform API for accounting, invoicing, and operations.
+  description: |
+    The Cynco REST API provides programmatic access to your business data — invoices,
+    customers, vendors, bills, journal entries, chart of accounts, bank accounts,
+    bank transactions, and financial reports.
+
+    ## Authentication
+
+    All requests require a Bearer token in the `Authorization` header. API keys are
+    created in the Cynco dashboard under **Settings > API Keys** and carry a `cak_`
+    prefix.
+
+    ```
+    Authorization: Bearer cak_live_abc123...
+    ```
+
+    Each key is scoped to a specific tenant and carries permission scopes that limit
+    which endpoints it can access.
+
+    ## Base URL
+
+    ```
+    https://app.cynco.io/api/v1/
+    ```
+
+    ## Pagination
+
+    List endpoints support two pagination modes:
+
+    **Offset pagination** (default) — use `page` and `limit` query parameters.
+    The response includes a `pagination` object with `page`, `limit`, `total`,
+    `totalPages`, and `hasMore`.
+
+    **Cursor pagination** — pass the `cursor` query parameter returned in the
+    previous response's `pagination.nextCursor`. Cursor and offset modes are
+    mutually exclusive; you cannot combine `cursor` with `page` > 1.
+
+    ## Field Selection
+
+    Pass `?fields=field1,field2` to receive only the specified fields on each
+    resource. Unknown fields return a 422 error.
+
+    ## Rate Limits
+
+    | Tier    | Requests / minute |
+    |---------|-------------------|
+    | Default | 120               |
+    | Read    | 200               |
+    | Write   | 60                |
+
+    Rate limit state is communicated via response headers:
+
+    - `X-RateLimit-Limit` — maximum requests in the window
+    - `X-RateLimit-Remaining` — remaining requests in the window
+    - `X-RateLimit-Reset` — Unix timestamp when the window resets
+
+    When the limit is exceeded the API responds with `429 Too Many Requests`.
+
+    ## Idempotency
+
+    Write operations (`POST`, `PATCH`, `DELETE`) accept an `Idempotency-Key`
+    header. If a request with the same key has already been processed, the original
+    response is replayed. Keys are scoped to the tenant and expire after 24 hours.
+
+    ## ETag Caching
+
+    GET responses include an `ETag` header. Send `If-None-Match` with the ETag
+    value on subsequent requests to receive `304 Not Modified` when the resource
+    has not changed.
+
+    ## Webhooks
+
+    Configure webhook endpoints in the Cynco dashboard. Events are delivered as
+    POST requests with the following headers:
+
+    - `X-Webhook-Id` — unique delivery ID
+    - `X-Webhook-Timestamp` — Unix timestamp of the delivery
+    - `X-Webhook-Signature` — HMAC-SHA256 signature of the request body using
+      your webhook secret
+
+    Verify signatures by computing `HMAC-SHA256(secret, timestamp + "." + body)`
+    and comparing to the signature header.
+
+    ### Webhook Events
+
+    | Event                      | Trigger                   |
+    |----------------------------|---------------------------|
+    | `invoice.created`          | Invoice created           |
+    | `invoice.updated`          | Invoice updated           |
+    | `invoice.deleted`          | Invoice deleted           |
+    | `customer.created`         | Customer created          |
+    | `customer.updated`         | Customer updated          |
+    | `customer.deleted`         | Customer deleted          |
+    | `vendor.created`           | Vendor created            |
+    | `vendor.updated`           | Vendor updated            |
+    | `vendor.deleted`           | Vendor deleted            |
+    | `bill.created`             | Bill created              |
+    | `bill.updated`             | Bill updated              |
+    | `bill.deleted`             | Bill deleted              |
+    | `journal_entry.created`    | Journal entry created     |
+    | `journal_entry.updated`    | Journal entry updated     |
+    | `item.created`             | Item created              |
+    | `item.updated`             | Item updated              |
+    | `item.deleted`             | Item deleted              |
+
+    ## Error Handling
+
+    All errors follow a consistent envelope:
+
+    ```json
+    {
+      "success": false,
+      "error": {
+        "code": "VALIDATION_ERROR",
+        "message": "Human-readable description",
+        "details": [{ "field": "name", "message": "Required" }]
+      },
+      "meta": {
+        "requestId": "req_abc123",
+        "apiVersion": "v1",
+        "timestamp": "2026-03-22T12:00:00.000Z"
+      }
+    }
+    ```
+  termsOfService: https://cynco.io/terms
+  contact:
+    name: Cynco API Support
+    url: https://cynco.io/support
+    email: support@cynco.io
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://app.cynco.io/api/v1
+    description: Production
+  - url: https://staging.cynco.io/api/v1
+    description: Staging
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Invoices
+    description: Create, read, update, and batch-manage invoices.
+  - name: Customers
+    description: Create, read, update, delete, and batch-manage customers.
+  - name: Vendors
+    description: Create, read, update, delete, and batch-manage vendors.
+  - name: Bills
+    description: Read and update bills.
+  - name: Items
+    description: Read, update, and delete line-item catalog entries.
+  - name: Accounts
+    description: Read chart-of-accounts entries.
+  - name: Journal Entries
+    description: Create, read, and batch-manage journal entries.
+  - name: Bank Accounts
+    description: Read financial (bank) accounts.
+  - name: Bank Transactions
+    description: Read bank transactions.
+  - name: Reports
+    description: Generate trial balance, balance sheet, and profit & loss reports.
+
+# ─── Paths ──────────────────────────────────────────────────────────────────
+
+paths:
+
+  # ── Invoices ────────────────────────────────────────────────────────────────
+
+  /invoices:
+    get:
+      operationId: listInvoices
+      summary: List invoices
+      description: |
+        Returns a paginated list of invoices for the authenticated tenant.
+        Supports offset and cursor pagination, filtering, sorting, and field
+        selection.
+      tags: [Invoices]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Fields"
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/InvoiceStatus"
+        - name: created_from
+          in: query
+          description: Filter invoices created on or after this date (ISO 8601).
+          schema:
+            type: string
+            format: date-time
+        - name: created_to
+          in: query
+          description: Filter invoices created on or before this date (ISO 8601).
+          schema:
+            type: string
+            format: date-time
+        - name: due_from
+          in: query
+          description: Filter invoices due on or after this date (ISO 8601).
+          schema:
+            type: string
+            format: date-time
+        - name: due_to
+          in: query
+          description: Filter invoices due on or before this date (ISO 8601).
+          schema:
+            type: string
+            format: date-time
+        - name: min_amount
+          in: query
+          description: Minimum total amount filter.
+          schema:
+            type: number
+            minimum: 0
+        - name: max_amount
+          in: query
+          description: Maximum total amount filter.
+          schema:
+            type: number
+            minimum: 0
+        - name: search
+          in: query
+          description: Free-text search across invoice number, customer name, and memo.
+          schema:
+            type: string
+            maxLength: 200
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [created_at, due_date, total]
+            default: created_at
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        "200":
+          description: Paginated list of invoices.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Invoice"
+                      pagination:
+                        $ref: "#/components/schemas/Pagination"
+                      links:
+                        $ref: "#/components/schemas/PaginationLinks"
+              example:
+                success: true
+                data:
+                  - id: "inv_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+                    invoiceNumber: "INV-2026-0042"
+                    status: finalized
+                    customerId: "cus_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+                    customerName: "Acme Corp Sdn Bhd"
+                    customerEmail: "billing@acmecorp.my"
+                    currency: MYR
+                    lineItems:
+                      - description: "Consulting services — March 2026"
+                        quantity: 40
+                        unitPrice: 250.00
+                        amount: 10000.00
+                    taxes: 600.00
+                    totalAmount: 10600.00
+                    paidAmount: 0
+                    hasDeposit: false
+                    depositAmount: 0
+                    dueDate: "2026-04-15"
+                    paymentTerms: "Net 30"
+                    memo: null
+                    source: normal
+                    createdAt: "2026-03-15T08:30:00.000Z"
+                    updatedAt: "2026-03-15T08:30:00.000Z"
+                pagination:
+                  page: 1
+                  limit: 20
+                  total: 142
+                  totalPages: 8
+                  hasMore: true
+                links:
+                  self: "https://app.cynco.io/api/v1/invoices?page=1&limit=20"
+                  first: "https://app.cynco.io/api/v1/invoices?page=1&limit=20"
+                  next: "https://app.cynco.io/api/v1/invoices?page=2&limit=20"
+                  prev: null
+                  last: "https://app.cynco.io/api/v1/invoices?page=8&limit=20"
+                meta:
+                  requestId: "req_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+                  apiVersion: v1
+                  timestamp: "2026-03-22T12:00:00.000Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /invoices/{id}:
+    get:
+      operationId: getInvoice
+      summary: Get an invoice
+      description: Retrieve a single invoice by ID.
+      tags: [Invoices]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/Fields"
+      responses:
+        "200":
+          description: Invoice found.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Invoice"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+    patch:
+      operationId: updateInvoice
+      summary: Update an invoice
+      description: |
+        Update non-structural fields on an invoice. Currently limited to `memo`,
+        `paymentTerms`, and `dueDate`. Full line-item editing is planned for a
+        future release.
+      tags: [Invoices]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateInvoiceInput"
+            example:
+              memo: "Updated payment instructions"
+              dueDate: "2026-05-01"
+      responses:
+        "200":
+          description: Invoice updated.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Invoice"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /invoices/batch:
+    post:
+      operationId: batchInvoices
+      summary: Batch create invoices
+      description: |
+        Create multiple invoices in a single request. Each item in the array
+        is processed independently; partial success is possible. The response
+        contains results for each item in the same order.
+      tags: [Invoices]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchRequest"
+      responses:
+        "200":
+          description: Batch result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ── Customers ───────────────────────────────────────────────────────────────
+
+  /customers:
+    get:
+      operationId: listCustomers
+      summary: List customers
+      description: |
+        Returns a paginated list of customers for the authenticated tenant.
+        By default only active customers are returned; use `status=all` or
+        `status=inactive` to change this.
+      tags: [Customers]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Fields"
+        - name: status
+          in: query
+          description: Filter by active status.
+          schema:
+            type: string
+            enum: [active, inactive, all]
+            default: active
+        - name: search
+          in: query
+          description: Free-text search across name, email, phone.
+          schema:
+            type: string
+            maxLength: 200
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [name, email, created_at]
+            default: created_at
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        "200":
+          description: Paginated list of customers.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Customer"
+                      pagination:
+                        $ref: "#/components/schemas/Pagination"
+                      links:
+                        $ref: "#/components/schemas/PaginationLinks"
+              example:
+                success: true
+                data:
+                  - id: "cus_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+                    name: "Acme Corp Sdn Bhd"
+                    email: "billing@acmecorp.my"
+                    phone: "+60123456789"
+                    address: "123 Jalan Ampang"
+                    city: "Kuala Lumpur"
+                    state: "Wilayah Persekutuan"
+                    zip: "50450"
+                    country: "MY"
+                    registrationNumber: "202101012345"
+                    taxId: null
+                    website: "https://acmecorp.my"
+                    paymentTerms: "Net 30"
+                    preferredPaymentMethod: "bank_transfer"
+                    preferredCurrency: "MYR"
+                    creditLimit: 50000.00
+                    category: "Enterprise"
+                    notes: null
+                    isActive: true
+                    createdAt: "2026-01-10T03:00:00.000Z"
+                    updatedAt: "2026-03-18T09:15:00.000Z"
+                pagination:
+                  page: 1
+                  limit: 20
+                  total: 35
+                  totalPages: 2
+                  hasMore: true
+                meta:
+                  requestId: "req_01HZXK4YNPQ4JG8BVR0WT9MXCE"
+                  apiVersion: v1
+                  timestamp: "2026-03-22T12:00:00.000Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+    post:
+      operationId: createCustomer
+      summary: Create a customer
+      description: Create a new customer. Duplicate emails return a 409 Conflict.
+      tags: [Customers]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCustomerInput"
+            example:
+              name: "Acme Corp Sdn Bhd"
+              email: "billing@acmecorp.my"
+              phone: "+60123456789"
+              address: "123 Jalan Ampang"
+              city: "Kuala Lumpur"
+              state: "Wilayah Persekutuan"
+              zip: "50450"
+              country: "MY"
+              paymentTerms: "Net 30"
+      responses:
+        "201":
+          description: Customer created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Customer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /customers/{id}:
+    get:
+      operationId: getCustomer
+      summary: Get a customer
+      description: Retrieve a single customer by ID.
+      tags: [Customers]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/Fields"
+      responses:
+        "200":
+          description: Customer found.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Customer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+    patch:
+      operationId: updateCustomer
+      summary: Update a customer
+      description: Update one or more fields on an existing customer. All fields are optional.
+      tags: [Customers]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCustomerInput"
+            example:
+              phone: "+60198765432"
+              creditLimit: "100000.00"
+      responses:
+        "200":
+          description: Customer updated.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Customer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+    delete:
+      operationId: deleteCustomer
+      summary: Delete a customer
+      description: |
+        Permanently delete a customer. This action is irreversible. Customers
+        with existing invoices cannot be deleted.
+      tags: [Customers]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Customer deleted.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                          deleted:
+                            type: boolean
+                            const: true
+              example:
+                success: true
+                data:
+                  id: "cus_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+                  deleted: true
+                meta:
+                  requestId: "req_01HZXK5YNPQ4JG8BVR0WT9MXCE"
+                  apiVersion: v1
+                  timestamp: "2026-03-22T12:00:00.000Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /customers/batch:
+    post:
+      operationId: batchCustomers
+      summary: Batch create customers
+      description: |
+        Create multiple customers in a single request. Each item is processed
+        independently; partial success is possible.
+      tags: [Customers]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchRequest"
+      responses:
+        "200":
+          description: Batch result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ── Vendors ─────────────────────────────────────────────────────────────────
+
+  /vendors:
+    get:
+      operationId: listVendors
+      summary: List vendors
+      description: |
+        Returns a paginated list of vendors for the authenticated tenant.
+        By default only active vendors are returned.
+      tags: [Vendors]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Fields"
+        - name: status
+          in: query
+          description: Filter by active status.
+          schema:
+            type: string
+            enum: [active, inactive, all]
+            default: active
+        - name: category
+          in: query
+          description: Filter by vendor category.
+          schema:
+            type: string
+            maxLength: 100
+        - name: search
+          in: query
+          description: Free-text search across name, email, phone.
+          schema:
+            type: string
+            maxLength: 200
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [name, created_at, total_amount]
+            default: created_at
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        "200":
+          description: Paginated list of vendors.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Vendor"
+                      pagination:
+                        $ref: "#/components/schemas/Pagination"
+                      links:
+                        $ref: "#/components/schemas/PaginationLinks"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+    post:
+      operationId: createVendor
+      summary: Create a vendor
+      description: Create a new vendor for the authenticated tenant.
+      tags: [Vendors]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVendorInput"
+            example:
+              name: "Office Supplies Co"
+              email: "accounts@officesupplies.my"
+              phone: "+60321234567"
+              category: "Office Supplies"
+              paymentTerms: "Net 14"
+      responses:
+        "201":
+          description: Vendor created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Vendor"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /vendors/{id}:
+    get:
+      operationId: getVendor
+      summary: Get a vendor
+      description: Retrieve a single vendor by ID.
+      tags: [Vendors]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/Fields"
+      responses:
+        "200":
+          description: Vendor found.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Vendor"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+    patch:
+      operationId: updateVendor
+      summary: Update a vendor
+      description: Update one or more fields on an existing vendor.
+      tags: [Vendors]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateVendorInput"
+            example:
+              category: "IT Services"
+              notes: "Preferred vendor for annual IT audit"
+      responses:
+        "200":
+          description: Vendor updated.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Vendor"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+    delete:
+      operationId: deleteVendor
+      summary: Delete a vendor
+      description: |
+        Permanently delete a vendor. Vendors with existing bills cannot be deleted.
+      tags: [Vendors]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Vendor deleted.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                          deleted:
+                            type: boolean
+                            const: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /vendors/batch:
+    post:
+      operationId: batchVendors
+      summary: Batch create vendors
+      description: Create multiple vendors in a single request.
+      tags: [Vendors]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchRequest"
+      responses:
+        "200":
+          description: Batch result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ── Bills ───────────────────────────────────────────────────────────────────
+
+  /bills:
+    get:
+      operationId: listBills
+      summary: List bills
+      description: |
+        Returns a paginated list of bills for the authenticated tenant.
+        Supports filtering by status, vendor, date range, and free-text search.
+      tags: [Bills]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Fields"
+        - name: status
+          in: query
+          description: Filter by bill status. Use `all` for no filter.
+          schema:
+            type: string
+            enum: [draft, in_review, pending_approval, approved, awaiting_payment, scheduled, paid, rejected, void, all]
+            default: all
+        - name: vendorId
+          in: query
+          description: Filter by vendor ID.
+          schema:
+            type: string
+        - name: startDate
+          in: query
+          description: Filter bills issued on or after this date (YYYY-MM-DD).
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          description: Filter bills issued on or before this date (YYYY-MM-DD).
+          schema:
+            type: string
+            format: date
+        - name: search
+          in: query
+          description: Free-text search across bill number, reference, vendor name, and memo.
+          schema:
+            type: string
+            maxLength: 200
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [created_at, due_date, total_amount, bill_number]
+            default: created_at
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        "200":
+          description: Paginated list of bills.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Bill"
+                      pagination:
+                        $ref: "#/components/schemas/Pagination"
+                      links:
+                        $ref: "#/components/schemas/PaginationLinks"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /bills/{id}:
+    get:
+      operationId: getBill
+      summary: Get a bill
+      description: Retrieve a single bill by ID.
+      tags: [Bills]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/Fields"
+      responses:
+        "200":
+          description: Bill found.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Bill"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+    patch:
+      operationId: updateBill
+      summary: Update a bill
+      description: |
+        Update fields on an existing bill. Supports updating metadata fields
+        like vendor, dates, status, and memo.
+      tags: [Bills]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateBillInput"
+            example:
+              status: approved
+              memo: "Approved by finance team"
+      responses:
+        "200":
+          description: Bill updated.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Bill"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ── Items ───────────────────────────────────────────────────────────────────
+
+  /items:
+    get:
+      operationId: listItems
+      summary: List items
+      description: |
+        Returns a paginated list of items (line-item catalog entries) for the
+        authenticated tenant.
+      tags: [Items]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Fields"
+        - name: search
+          in: query
+          description: Free-text search across item name and description.
+          schema:
+            type: string
+            maxLength: 200
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        "200":
+          description: Paginated list of items.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Item"
+                      pagination:
+                        $ref: "#/components/schemas/Pagination"
+                      links:
+                        $ref: "#/components/schemas/PaginationLinks"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /items/{id}:
+    get:
+      operationId: getItem
+      summary: Get an item
+      description: Retrieve a single item by ID.
+      tags: [Items]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/Fields"
+      responses:
+        "200":
+          description: Item found.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Item"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+    patch:
+      operationId: updateItem
+      summary: Update an item
+      description: Update one or more fields on an existing item.
+      tags: [Items]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateItemInput"
+            example:
+              unitPrice: 29.90
+              taxRate: 6
+      responses:
+        "200":
+          description: Item updated.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Item"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+    delete:
+      operationId: deleteItem
+      summary: Delete an item
+      description: Permanently delete an item from the catalog.
+      tags: [Items]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Item deleted.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                          deleted:
+                            type: boolean
+                            const: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ── Accounts ────────────────────────────────────────────────────────────────
+
+  /accounts:
+    get:
+      operationId: listAccounts
+      summary: List chart of accounts
+      description: |
+        Returns all accounts in the tenant's active chart of accounts.
+        If no chart of accounts has been set up, an empty array is returned.
+        This endpoint does not paginate; most tenants have fewer than 200
+        accounts.
+      tags: [Accounts]
+      parameters:
+        - name: account_type
+          in: query
+          description: Filter by account type.
+          schema:
+            type: string
+            enum:
+              - asset
+              - liability
+              - equity
+              - revenue
+              - expense
+              - contra_asset
+              - contra_liability
+              - contra_equity
+              - contra_revenue
+              - contra_expense
+        - name: active_only
+          in: query
+          description: When `true`, only active accounts are returned.
+          schema:
+            type: string
+            enum: ["true", "false"]
+            default: "true"
+      responses:
+        "200":
+          description: List of accounts.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Account"
+              example:
+                success: true
+                data:
+                  - id: "acc_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+                    accountCode: "1000"
+                    accountName: "Cash and Cash Equivalents"
+                    accountType: asset
+                    normalBalance: debit
+                    parentAccountId: null
+                    path: "1000"
+                    level: 0
+                    isActive: true
+                    isSystemAccount: true
+                    isHeaderAccount: false
+                    isCashAccount: true
+                    isBankAccount: false
+                    taxRelated: false
+                    defaultTaxRate: null
+                    taxCode: null
+                    description: "Cash on hand and in bank accounts"
+                    createdAt: "2026-01-01T00:00:00.000Z"
+                    updatedAt: "2026-01-01T00:00:00.000Z"
+                meta:
+                  requestId: "req_01HZXK6YNPQ4JG8BVR0WT9MXCE"
+                  apiVersion: v1
+                  timestamp: "2026-03-22T12:00:00.000Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ── Journal Entries ─────────────────────────────────────────────────────────
+
+  /journal-entries:
+    get:
+      operationId: listJournalEntries
+      summary: List journal entries
+      description: |
+        Returns a paginated list of journal entries. Supports filtering by
+        period, status, source, and free-text search.
+      tags: [Journal Entries]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Fields"
+        - name: period
+          in: query
+          description: Filter by accounting period (YYYY-MM).
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}$'
+          example: "2026-03"
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/JournalEntryStatus"
+        - name: source
+          in: query
+          description: Filter by journal entry source.
+          schema:
+            type: string
+            enum: [extraction, manual, import, adjustment, opening_balance, closing_entry, bill, invoice, credit_note, depreciation]
+        - name: search
+          in: query
+          description: Free-text search across entry number, description, and memo.
+          schema:
+            type: string
+            maxLength: 200
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [entryNumber, entryDate, totalDebit, totalCredit, status]
+            default: entryDate
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        "200":
+          description: Paginated list of journal entries.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/JournalEntry"
+                      pagination:
+                        $ref: "#/components/schemas/Pagination"
+                      links:
+                        $ref: "#/components/schemas/PaginationLinks"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+    post:
+      operationId: createJournalEntry
+      summary: Create a journal entry
+      description: |
+        Create a new double-entry journal entry. The entry must have at least
+        two lines, and total debits must equal total credits (within a tolerance
+        of 0.01).
+      tags: [Journal Entries]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateJournalEntryInput"
+            example:
+              entryDate: "2026-03-22"
+              description: "Office rent — March 2026"
+              currency: MYR
+              source: manual
+              lines:
+                - accountId: "acc_rent_expense"
+                  debitAmount: 5000.00
+                  creditAmount: 0
+                  description: "Rent expense"
+                - accountId: "acc_bank"
+                  debitAmount: 0
+                  creditAmount: 5000.00
+                  description: "Bank payment"
+      responses:
+        "201":
+          description: Journal entry created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/JournalEntry"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /journal-entries/{id}:
+    get:
+      operationId: getJournalEntry
+      summary: Get a journal entry
+      description: Retrieve a single journal entry by ID, including all lines.
+      tags: [Journal Entries]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/Fields"
+      responses:
+        "200":
+          description: Journal entry found.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/JournalEntry"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /journal-entries/batch:
+    post:
+      operationId: batchJournalEntries
+      summary: Batch create journal entries
+      description: Create multiple journal entries in a single request.
+      tags: [Journal Entries]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchRequest"
+      responses:
+        "200":
+          description: Batch result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ── Bank Accounts ───────────────────────────────────────────────────────────
+
+  /bank-accounts:
+    get:
+      operationId: listBankAccounts
+      summary: List bank accounts
+      description: |
+        Returns all financial (bank) accounts for the authenticated tenant.
+        Bank accounts are typically few per tenant (< 20), so this endpoint
+        does not paginate.
+      tags: [Bank Accounts]
+      responses:
+        "200":
+          description: List of bank accounts.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/BankAccount"
+              example:
+                success: true
+                data:
+                  - id: "ba_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+                    accountName: "CIMB Business Current"
+                    accountType: "current"
+                    currency: "MYR"
+                    currentBalance: 125430.50
+                    creditLimit: null
+                    openingBalance: 100000.00
+                    openingBalanceDate: "2026-01-01"
+                    lastStatementDate: "2026-03-15"
+                    lastReconciledDate: "2026-03-10"
+                    displayOrder: 1
+                    notes: null
+                    institution:
+                      id: "inst_cimb"
+                      name: "CIMB Bank"
+                      swiftCode: "CIBBMYKL"
+                    isActive: true
+                    createdAt: "2026-01-01T00:00:00.000Z"
+                    updatedAt: "2026-03-15T08:00:00.000Z"
+                meta:
+                  requestId: "req_01HZXK7YNPQ4JG8BVR0WT9MXCE"
+                  apiVersion: v1
+                  timestamp: "2026-03-22T12:00:00.000Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ── Bank Transactions ───────────────────────────────────────────────────────
+
+  /bank-transactions:
+    get:
+      operationId: listBankTransactions
+      summary: List bank transactions
+      description: |
+        Returns a paginated list of bank transactions for the authenticated
+        tenant. Supports filtering by account, date range, type, status,
+        match status, and free-text search.
+      tags: [Bank Transactions]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - name: limit
+          in: query
+          description: Number of items per page (1-100).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Fields"
+        - name: accountId
+          in: query
+          description: Filter by financial account ID.
+          schema:
+            type: string
+        - name: startDate
+          in: query
+          description: Filter transactions on or after this date (YYYY-MM-DD).
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          description: Filter transactions on or before this date (YYYY-MM-DD).
+          schema:
+            type: string
+            format: date
+        - name: type
+          in: query
+          description: Filter by transaction direction.
+          schema:
+            type: string
+            enum: [credit, debit]
+        - name: status
+          in: query
+          description: Filter by processing status.
+          schema:
+            type: string
+            enum: [imported, categorized, posted, reconciled, excluded]
+        - name: matchStatus
+          in: query
+          description: Filter by reconciliation match status.
+          schema:
+            type: string
+            enum: [unmatched, suggested, matched, reconciled, excluded]
+        - name: search
+          in: query
+          description: Free-text search across description, payee, and reference.
+          schema:
+            type: string
+            maxLength: 200
+      responses:
+        "200":
+          description: Paginated list of bank transactions.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/BankTransaction"
+                      pagination:
+                        $ref: "#/components/schemas/Pagination"
+                      links:
+                        $ref: "#/components/schemas/PaginationLinks"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ── Reports ─────────────────────────────────────────────────────────────────
+
+  /reports/trial-balance:
+    get:
+      operationId: getTrialBalance
+      summary: Generate trial balance
+      description: |
+        Generate a trial balance report for the specified accounting period.
+        Returns per-account opening balances, period activity, and closing
+        balances.
+      tags: [Reports]
+      parameters:
+        - name: period
+          in: query
+          required: true
+          description: Accounting period (YYYY-MM).
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}$'
+          example: "2026-03"
+        - name: balanceType
+          in: query
+          description: Type of trial balance.
+          schema:
+            type: string
+            enum: [preliminary, adjusted, final]
+            default: preliminary
+      responses:
+        "200":
+          description: Trial balance report.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/TrialBalance"
+              example:
+                success: true
+                data:
+                  period: "2026-03"
+                  asOfDate: "2026-03-31"
+                  balanceType: preliminary
+                  totalDebit: 150000.00
+                  totalCredit: 150000.00
+                  isBalanced: true
+                  difference: 0.00
+                  accountCount: 45
+                  lineItems:
+                    - accountId: "acc_1000"
+                      accountCode: "1000"
+                      accountName: "Cash and Cash Equivalents"
+                      accountType: asset
+                      normalBalance: debit
+                      openingBalance: 100000.00
+                      periodDebit: 50000.00
+                      periodCredit: 25000.00
+                      closingBalance: 125000.00
+                      debitBalance: 125000.00
+                      creditBalance: 0
+                      transactionCount: 42
+                meta:
+                  requestId: "req_01HZXK8YNPQ4JG8BVR0WT9MXCE"
+                  apiVersion: v1
+                  timestamp: "2026-03-22T12:00:00.000Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /reports/balance-sheet:
+    get:
+      operationId: getBalanceSheet
+      summary: Generate balance sheet
+      description: |
+        Generate a balance sheet for the specified accounting period. Returns
+        grouped sections for assets, liabilities, and equity.
+      tags: [Reports]
+      parameters:
+        - name: period
+          in: query
+          required: true
+          description: Accounting period (YYYY-MM).
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}$'
+          example: "2026-03"
+      responses:
+        "200":
+          description: Balance sheet report.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/FinancialStatement"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /reports/profit-loss:
+    get:
+      operationId: getProfitLoss
+      summary: Generate profit & loss
+      description: |
+        Generate a profit & loss (income statement) for the specified
+        accounting period. Returns grouped sections for revenue, cost of
+        goods sold, operating expenses, and other income/expenses.
+      tags: [Reports]
+      parameters:
+        - name: period
+          in: query
+          required: true
+          description: Accounting period (YYYY-MM).
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}$'
+          example: "2026-03"
+      responses:
+        "200":
+          description: Profit & loss report.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/FinancialStatement"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+# ─── Components ─────────────────────────────────────────────────────────────
+
+components:
+
+  # ── Security Schemes ────────────────────────────────────────────────────────
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: "cak_*"
+      description: |
+        API keys are created in the Cynco dashboard under Settings > API Keys.
+        All keys carry a `cak_` prefix.
+
+  # ── Reusable Parameters ─────────────────────────────────────────────────────
+
+  parameters:
+    ResourceId:
+      name: id
+      in: path
+      required: true
+      description: Unique resource identifier.
+      schema:
+        type: string
+      example: "inv_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+
+    Page:
+      name: page
+      in: query
+      description: Page number for offset pagination (1-based).
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+
+    Limit:
+      name: limit
+      in: query
+      description: Number of items per page (1-100).
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+    Cursor:
+      name: cursor
+      in: query
+      description: |
+        Opaque cursor for cursor-based pagination. Mutually exclusive with
+        `page` > 1. Use the `nextCursor` value from the previous response.
+      schema:
+        type: string
+        maxLength: 500
+
+    Fields:
+      name: fields
+      in: query
+      description: |
+        Comma-separated list of fields to include in the response.
+        Unknown fields return a 422 error.
+      schema:
+        type: string
+        maxLength: 500
+      example: "id,name,email,createdAt"
+
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: |
+        Unique key for idempotent write operations. If a request with the
+        same key has already been processed for this tenant, the original
+        response is replayed. Keys expire after 24 hours.
+      schema:
+        type: string
+        maxLength: 255
+      example: "idem_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+
+  # ── Reusable Headers ───────────────────────────────────────────────────────
+
+  headers:
+    X-RateLimit-Limit:
+      description: Maximum number of requests allowed in the current window.
+      schema:
+        type: integer
+      example: 200
+
+    X-RateLimit-Remaining:
+      description: Number of requests remaining in the current window.
+      schema:
+        type: integer
+      example: 187
+
+    X-RateLimit-Reset:
+      description: Unix timestamp (seconds) when the rate limit window resets.
+      schema:
+        type: integer
+      example: 1711108860
+
+    ETag:
+      description: Entity tag for cache validation. Use with `If-None-Match`.
+      schema:
+        type: string
+      example: '"a1b2c3d4e5f6"'
+
+  # ── Reusable Responses ─────────────────────────────────────────────────────
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid authentication token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            success: false
+            error:
+              code: AUTHENTICATION_ERROR
+              message: "Invalid or expired API key."
+              details: []
+            meta:
+              requestId: "req_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+              apiVersion: v1
+              timestamp: "2026-03-22T12:00:00.000Z"
+
+    Forbidden:
+      description: Insufficient permissions (scope missing).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            success: false
+            error:
+              code: FORBIDDEN
+              message: "API key does not have the required scope: invoices:write"
+              details: []
+            meta:
+              requestId: "req_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+              apiVersion: v1
+              timestamp: "2026-03-22T12:00:00.000Z"
+
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            success: false
+            error:
+              code: NOT_FOUND
+              message: "Resource not found."
+              details: []
+            meta:
+              requestId: "req_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+              apiVersion: v1
+              timestamp: "2026-03-22T12:00:00.000Z"
+
+    ValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            success: false
+            error:
+              code: VALIDATION_ERROR
+              message: "Invalid query parameters."
+              details:
+                - field: name
+                  message: Required
+            meta:
+              requestId: "req_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+              apiVersion: v1
+              timestamp: "2026-03-22T12:00:00.000Z"
+
+    Conflict:
+      description: Resource conflict (e.g. duplicate email).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            success: false
+            error:
+              code: CONFLICT
+              message: "A customer with this email already exists."
+              details: []
+            meta:
+              requestId: "req_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+              apiVersion: v1
+              timestamp: "2026-03-22T12:00:00.000Z"
+
+    RateLimited:
+      description: Rate limit exceeded.
+      headers:
+        X-RateLimit-Limit:
+          $ref: "#/components/headers/X-RateLimit-Limit"
+        X-RateLimit-Remaining:
+          $ref: "#/components/headers/X-RateLimit-Remaining"
+        X-RateLimit-Reset:
+          $ref: "#/components/headers/X-RateLimit-Reset"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            success: false
+            error:
+              code: RATE_LIMITED
+              message: "Rate limit exceeded. Try again in 42 seconds."
+              details: []
+            meta:
+              requestId: "req_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+              apiVersion: v1
+              timestamp: "2026-03-22T12:00:00.000Z"
+
+  # ── Schemas ─────────────────────────────────────────────────────────────────
+
+  schemas:
+
+    # ── Envelope Schemas ──────────────────────────────────────────────────────
+
+    SuccessEnvelope:
+      type: object
+      required: [success, meta]
+      properties:
+        success:
+          type: boolean
+          const: true
+        meta:
+          $ref: "#/components/schemas/Meta"
+
+    ErrorEnvelope:
+      type: object
+      required: [success, error, meta]
+      properties:
+        success:
+          type: boolean
+          const: false
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - AUTHENTICATION_ERROR
+                - FORBIDDEN
+                - NOT_FOUND
+                - VALIDATION_ERROR
+                - RATE_LIMITED
+                - CONFLICT
+                - INTERNAL_ERROR
+                - METHOD_NOT_ALLOWED
+            message:
+              type: string
+              description: Human-readable error description.
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                    description: The field that caused the error.
+                  message:
+                    type: string
+                    description: Description of what is wrong with the field.
+              default: []
+        meta:
+          $ref: "#/components/schemas/Meta"
+
+    Meta:
+      type: object
+      properties:
+        requestId:
+          type: string
+          description: Unique identifier for this request, useful for support.
+          example: "req_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+        apiVersion:
+          type: string
+          description: API version that handled the request.
+          example: v1
+        timestamp:
+          type: string
+          format: date-time
+          description: Server timestamp when the response was generated.
+          example: "2026-03-22T12:00:00.000Z"
+
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+          description: Current page number.
+          example: 1
+        limit:
+          type: integer
+          description: Items per page.
+          example: 20
+        total:
+          type: integer
+          description: Total number of matching items.
+          example: 142
+        totalPages:
+          type: integer
+          description: Total number of pages.
+          example: 8
+        hasMore:
+          type: boolean
+          description: Whether there are more pages after the current one.
+          example: true
+        nextCursor:
+          type:
+            - string
+            - "null"
+          description: Cursor for the next page (cursor pagination only).
+          example: "eyJpZCI6IjAxSFpYSzNZTlBRNEpHOEJWUjBXVDlNWENFIiwiZiI6ImNyZWF0ZWRfYXQiLCJkIjoiZGVzYyJ9"
+
+    PaginationLinks:
+      type: object
+      description: HATEOAS-style pagination links.
+      properties:
+        self:
+          type: string
+          format: uri
+          example: "https://app.cynco.io/api/v1/invoices?page=1&limit=20"
+        first:
+          type: string
+          format: uri
+          example: "https://app.cynco.io/api/v1/invoices?page=1&limit=20"
+        next:
+          type:
+            - string
+            - "null"
+          format: uri
+          example: "https://app.cynco.io/api/v1/invoices?page=2&limit=20"
+        prev:
+          type:
+            - string
+            - "null"
+          format: uri
+          example: null
+        last:
+          type: string
+          format: uri
+          example: "https://app.cynco.io/api/v1/invoices?page=8&limit=20"
+
+    # ── Batch Schemas ─────────────────────────────────────────────────────────
+
+    BatchRequest:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          description: Array of resource objects to create. Maximum 100 per request.
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            additionalProperties: true
+
+    BatchResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          properties:
+            total:
+              type: integer
+              description: Total items submitted.
+            succeeded:
+              type: integer
+              description: Number of items created successfully.
+            failed:
+              type: integer
+              description: Number of items that failed.
+            results:
+              type: array
+              items:
+                type: object
+                properties:
+                  index:
+                    type: integer
+                    description: Zero-based index of the item in the request array.
+                  success:
+                    type: boolean
+                  data:
+                    type:
+                      - object
+                      - "null"
+                    description: The created resource (on success).
+                  error:
+                    type:
+                      - object
+                      - "null"
+                    description: Error details (on failure).
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      details:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            field:
+                              type: string
+                            message:
+                              type: string
+        meta:
+          $ref: "#/components/schemas/Meta"
+
+    # ── Resource Schemas ──────────────────────────────────────────────────────
+
+    # ── Invoice ───────────────────────────────────────────────────────────────
+
+    InvoiceStatus:
+      type: string
+      enum: [draft, finalized, paid, overdue, partially_paid, deposit_paid, deposit_due]
+
+    InvoiceLineItem:
+      type: object
+      properties:
+        description:
+          type:
+            - string
+            - "null"
+        quantity:
+          type: number
+        unitPrice:
+          type: number
+        amount:
+          type: number
+        taxRate:
+          type:
+            - number
+            - "null"
+        discountRate:
+          type:
+            - number
+            - "null"
+
+    Invoice:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique invoice identifier.
+          example: "inv_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+        invoiceNumber:
+          type: string
+          description: Human-readable invoice number.
+          example: "INV-2026-0042"
+        status:
+          $ref: "#/components/schemas/InvoiceStatus"
+        customerId:
+          type:
+            - string
+            - "null"
+          description: ID of the associated customer.
+        customerName:
+          type:
+            - string
+            - "null"
+          description: Name of the associated customer.
+        customerEmail:
+          type:
+            - string
+            - "null"
+          description: Email of the associated customer.
+        currency:
+          type: string
+          description: ISO 4217 currency code.
+          default: MYR
+          example: MYR
+        lineItems:
+          type: array
+          items:
+            $ref: "#/components/schemas/InvoiceLineItem"
+          description: Invoice line items.
+        taxes:
+          type: number
+          description: Total tax amount.
+          example: 600.00
+        totalAmount:
+          type:
+            - number
+            - "null"
+          description: Grand total including tax.
+          example: 10600.00
+        paidAmount:
+          type: number
+          description: Amount already paid.
+          example: 0
+        hasDeposit:
+          type: boolean
+          description: Whether a deposit has been requested or paid.
+          example: false
+        depositAmount:
+          type: number
+          description: Deposit amount.
+          example: 0
+        dueDate:
+          type:
+            - string
+            - "null"
+          format: date
+          description: Payment due date.
+          example: "2026-04-15"
+        paymentTerms:
+          type:
+            - string
+            - "null"
+          description: Payment terms (e.g. "Net 30").
+          example: "Net 30"
+        memo:
+          type:
+            - string
+            - "null"
+          description: Internal memo or notes.
+        source:
+          type: string
+          description: How the invoice was created.
+          example: normal
+        createdAt:
+          type: string
+          format: date-time
+          description: When the invoice was created.
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the invoice was last updated.
+
+    UpdateInvoiceInput:
+      type: object
+      description: Fields that can be updated on an invoice.
+      properties:
+        memo:
+          type:
+            - string
+            - "null"
+          maxLength: 2000
+          description: Internal memo or notes.
+        paymentTerms:
+          type:
+            - string
+            - "null"
+          maxLength: 200
+          description: Payment terms.
+        dueDate:
+          type:
+            - string
+            - "null"
+          format: date
+          description: Payment due date (YYYY-MM-DD).
+
+    # ── Customer ──────────────────────────────────────────────────────────────
+
+    Customer:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique customer identifier.
+          example: "cus_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+        name:
+          type: string
+          description: Customer display name.
+          example: "Acme Corp Sdn Bhd"
+        email:
+          type:
+            - string
+            - "null"
+          format: email
+          example: "billing@acmecorp.my"
+        phone:
+          type:
+            - string
+            - "null"
+          example: "+60123456789"
+        address:
+          type:
+            - string
+            - "null"
+          example: "123 Jalan Ampang"
+        city:
+          type:
+            - string
+            - "null"
+          example: "Kuala Lumpur"
+        state:
+          type:
+            - string
+            - "null"
+          example: "Wilayah Persekutuan"
+        zip:
+          type:
+            - string
+            - "null"
+          example: "50450"
+        country:
+          type:
+            - string
+            - "null"
+          example: "MY"
+        registrationNumber:
+          type:
+            - string
+            - "null"
+          description: Company registration number.
+          example: "202101012345"
+        taxId:
+          type:
+            - string
+            - "null"
+          description: Tax identification number.
+        website:
+          type:
+            - string
+            - "null"
+          example: "https://acmecorp.my"
+        paymentTerms:
+          type:
+            - string
+            - "null"
+          example: "Net 30"
+        preferredPaymentMethod:
+          type:
+            - string
+            - "null"
+          example: "bank_transfer"
+        preferredCurrency:
+          type:
+            - string
+            - "null"
+          description: ISO 4217 currency code.
+          example: "MYR"
+        creditLimit:
+          type:
+            - number
+            - "null"
+          description: Credit limit in the customer's preferred currency.
+          example: 50000.00
+        category:
+          type:
+            - string
+            - "null"
+          description: Customer category or segment.
+          example: "Enterprise"
+        notes:
+          type:
+            - string
+            - "null"
+          description: Free-form notes about this customer.
+        isActive:
+          type: boolean
+          description: Whether the customer is active.
+          default: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateCustomerInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 300
+          description: Customer display name.
+        email:
+          type: string
+          format: email
+          maxLength: 200
+        phone:
+          type: string
+          maxLength: 50
+        address:
+          type: string
+          maxLength: 500
+        city:
+          type: string
+          maxLength: 100
+        state:
+          type: string
+          maxLength: 100
+        zip:
+          type: string
+          maxLength: 20
+        country:
+          type: string
+          maxLength: 100
+        registrationNumber:
+          type: string
+          maxLength: 100
+        taxId:
+          type: string
+          maxLength: 100
+        website:
+          type: string
+          maxLength: 500
+        paymentTerms:
+          type: string
+          maxLength: 100
+        preferredPaymentMethod:
+          type: string
+          maxLength: 100
+        preferredCurrency:
+          type: string
+          minLength: 3
+          maxLength: 3
+          description: ISO 4217 currency code.
+        creditLimit:
+          type: string
+          pattern: '^\d+(\.\d{1,2})?$'
+          description: Decimal string (e.g. "1000.00").
+        category:
+          type: string
+          maxLength: 100
+        notes:
+          type: string
+          maxLength: 2000
+
+    UpdateCustomerInput:
+      type: object
+      description: All fields are optional. Only provided fields are updated.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 300
+        email:
+          type: string
+          format: email
+          maxLength: 200
+        phone:
+          type: string
+          maxLength: 50
+        address:
+          type: string
+          maxLength: 500
+        city:
+          type: string
+          maxLength: 100
+        state:
+          type: string
+          maxLength: 100
+        zip:
+          type: string
+          maxLength: 20
+        country:
+          type: string
+          maxLength: 100
+        registrationNumber:
+          type: string
+          maxLength: 100
+        taxId:
+          type: string
+          maxLength: 100
+        website:
+          type: string
+          maxLength: 500
+        paymentTerms:
+          type: string
+          maxLength: 100
+        preferredPaymentMethod:
+          type: string
+          maxLength: 100
+        preferredCurrency:
+          type: string
+          minLength: 3
+          maxLength: 3
+        creditLimit:
+          type: string
+          pattern: '^\d+(\.\d{1,2})?$'
+        category:
+          type: string
+          maxLength: 100
+        notes:
+          type: string
+          maxLength: 2000
+        isActive:
+          type: boolean
+
+    # ── Vendor ────────────────────────────────────────────────────────────────
+
+    Vendor:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "ven_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+        name:
+          type: string
+          example: "Office Supplies Co"
+        email:
+          type:
+            - string
+            - "null"
+          format: email
+        phone:
+          type:
+            - string
+            - "null"
+        address:
+          type:
+            - string
+            - "null"
+        city:
+          type:
+            - string
+            - "null"
+        state:
+          type:
+            - string
+            - "null"
+        zip:
+          type:
+            - string
+            - "null"
+        country:
+          type:
+            - string
+            - "null"
+        registrationNumber:
+          type:
+            - string
+            - "null"
+        taxId:
+          type:
+            - string
+            - "null"
+        website:
+          type:
+            - string
+            - "null"
+        paymentTerms:
+          type:
+            - string
+            - "null"
+        preferredPaymentMethod:
+          type:
+            - string
+            - "null"
+        preferredCurrency:
+          type:
+            - string
+            - "null"
+        creditLimit:
+          type:
+            - number
+            - "null"
+        category:
+          type:
+            - string
+            - "null"
+        notes:
+          type:
+            - string
+            - "null"
+        isActive:
+          type: boolean
+          default: true
+        totalAmount:
+          type: number
+          description: Total amount of all bills for this vendor.
+          example: 25000.00
+        totalPayments:
+          type: number
+          description: Total payments made to this vendor.
+          example: 20000.00
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateVendorInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 300
+        email:
+          type: string
+          format: email
+          maxLength: 200
+        phone:
+          type: string
+          maxLength: 50
+        address:
+          type: string
+          maxLength: 500
+        city:
+          type: string
+          maxLength: 100
+        state:
+          type: string
+          maxLength: 100
+        zip:
+          type: string
+          maxLength: 20
+        country:
+          type: string
+          maxLength: 100
+        registrationNumber:
+          type: string
+          maxLength: 100
+        taxId:
+          type: string
+          maxLength: 100
+        website:
+          type: string
+          maxLength: 500
+        paymentTerms:
+          type: string
+          maxLength: 100
+        preferredPaymentMethod:
+          type: string
+          maxLength: 100
+        bankAccountNumber:
+          type: string
+          maxLength: 100
+        bankName:
+          type: string
+          maxLength: 200
+        bankBranch:
+          type: string
+          maxLength: 200
+        category:
+          type: string
+          maxLength: 100
+        notes:
+          type: string
+          maxLength: 2000
+        defaultExpenseAccountId:
+          type: string
+        defaultPayableAccountId:
+          type: string
+
+    UpdateVendorInput:
+      type: object
+      description: All fields are optional. Only provided fields are updated.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 300
+        email:
+          type: string
+          format: email
+          maxLength: 200
+        phone:
+          type: string
+          maxLength: 50
+        address:
+          type: string
+          maxLength: 500
+        city:
+          type: string
+          maxLength: 100
+        state:
+          type: string
+          maxLength: 100
+        zip:
+          type: string
+          maxLength: 20
+        country:
+          type: string
+          maxLength: 100
+        registrationNumber:
+          type: string
+          maxLength: 100
+        taxId:
+          type: string
+          maxLength: 100
+        website:
+          type: string
+          maxLength: 500
+        paymentTerms:
+          type: string
+          maxLength: 100
+        preferredPaymentMethod:
+          type: string
+          maxLength: 100
+        bankAccountNumber:
+          type: string
+          maxLength: 100
+        bankName:
+          type: string
+          maxLength: 200
+        bankBranch:
+          type: string
+          maxLength: 200
+        category:
+          type: string
+          maxLength: 100
+        notes:
+          type: string
+          maxLength: 2000
+        defaultExpenseAccountId:
+          type: string
+        defaultPayableAccountId:
+          type: string
+        isActive:
+          type: boolean
+
+    # ── Bill ──────────────────────────────────────────────────────────────────
+
+    BillStatus:
+      type: string
+      enum: [draft, in_review, pending_approval, approved, awaiting_payment, scheduled, paid, rejected, void]
+
+    BillLineItem:
+      type: object
+      properties:
+        description:
+          type:
+            - string
+            - "null"
+        quantity:
+          type: number
+        unitPrice:
+          type: number
+        amount:
+          type: number
+        accountId:
+          type:
+            - string
+            - "null"
+        taxRate:
+          type:
+            - number
+            - "null"
+
+    Bill:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "bil_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+        billNumber:
+          type:
+            - string
+            - "null"
+          example: "BILL-2026-0018"
+        referenceNumber:
+          type:
+            - string
+            - "null"
+          description: Vendor's invoice/reference number.
+        vendorId:
+          type:
+            - string
+            - "null"
+        vendorName:
+          type:
+            - string
+            - "null"
+        status:
+          $ref: "#/components/schemas/BillStatus"
+        currency:
+          type: string
+          default: MYR
+        subtotalAmount:
+          type:
+            - number
+            - "null"
+          description: Subtotal before tax.
+        taxAmount:
+          type:
+            - number
+            - "null"
+        totalAmount:
+          type:
+            - number
+            - "null"
+          description: Grand total including tax.
+        issueDate:
+          type:
+            - string
+            - "null"
+          format: date-time
+          description: Date the bill was issued.
+        dueDate:
+          type:
+            - string
+            - "null"
+          format: date-time
+          description: Payment due date.
+        category:
+          type:
+            - string
+            - "null"
+        memo:
+          type:
+            - string
+            - "null"
+        notes:
+          type:
+            - string
+            - "null"
+        source:
+          type:
+            - string
+            - "null"
+          description: How the bill was created (e.g. extraction, manual).
+        lineItems:
+          type:
+            - array
+            - "null"
+          items:
+            $ref: "#/components/schemas/BillLineItem"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    UpdateBillInput:
+      type: object
+      additionalProperties: false
+      properties:
+        vendorId:
+          type: string
+        billNumber:
+          type: string
+          maxLength: 50
+        referenceNumber:
+          type: string
+          maxLength: 100
+        status:
+          $ref: "#/components/schemas/BillStatus"
+        currency:
+          type: string
+          maxLength: 3
+        dueDate:
+          type: string
+          format: date-time
+          description: ISO 8601 date or date-time.
+        issueDate:
+          type: string
+          format: date-time
+          description: ISO 8601 date or date-time.
+        category:
+          type: string
+          maxLength: 100
+        memo:
+          type: string
+          maxLength: 2000
+        notes:
+          type: string
+          maxLength: 5000
+
+    # ── Item ──────────────────────────────────────────────────────────────────
+
+    Item:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "itm_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+        name:
+          type: string
+          example: "Consulting — hourly"
+        description:
+          type:
+            - string
+            - "null"
+          example: "Standard consulting rate"
+        unitPrice:
+          type: number
+          description: Price per unit.
+          example: 250.00
+        taxRate:
+          type: number
+          description: Tax rate percentage (0-100).
+          example: 6
+        discountRate:
+          type: number
+          description: Discount rate percentage (0-100).
+          example: 0
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    UpdateItemInput:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 1000
+        unitPrice:
+          type: number
+          minimum: 0
+        taxRate:
+          type: number
+          minimum: 0
+          maximum: 100
+        discountRate:
+          type: number
+          minimum: 0
+          maximum: 100
+
+    # ── Account (COA) ─────────────────────────────────────────────────────────
+
+    Account:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "acc_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+        accountCode:
+          type: string
+          description: Chart of accounts code.
+          example: "1000"
+        accountName:
+          type: string
+          example: "Cash and Cash Equivalents"
+        accountType:
+          type: string
+          enum: [asset, liability, equity, revenue, expense, contra_asset, contra_liability, contra_equity, contra_revenue, contra_expense]
+        normalBalance:
+          type:
+            - string
+            - "null"
+          enum: [debit, credit]
+        parentAccountId:
+          type:
+            - string
+            - "null"
+          description: ID of the parent account (for hierarchical COA).
+        path:
+          type:
+            - string
+            - "null"
+          description: Hierarchical path in the chart of accounts.
+        level:
+          type: integer
+          description: Nesting depth (0 = top-level).
+          example: 0
+        isActive:
+          type: boolean
+          default: true
+        isSystemAccount:
+          type: boolean
+          description: Whether this account is system-generated and cannot be deleted.
+          default: false
+        isHeaderAccount:
+          type: boolean
+          description: Header accounts group sub-accounts and cannot hold transactions.
+          default: false
+        isCashAccount:
+          type: boolean
+          default: false
+        isBankAccount:
+          type: boolean
+          default: false
+        taxRelated:
+          type: boolean
+          default: false
+        defaultTaxRate:
+          type:
+            - number
+            - "null"
+        taxCode:
+          type:
+            - string
+            - "null"
+        description:
+          type:
+            - string
+            - "null"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    # ── Journal Entry ─────────────────────────────────────────────────────────
+
+    JournalEntryStatus:
+      type: string
+      enum: [draft, submitted, approved, posted, cancelled, reversed]
+
+    JournalEntryLine:
+      type: object
+      properties:
+        accountId:
+          type: string
+        accountName:
+          type:
+            - string
+            - "null"
+        accountCode:
+          type:
+            - string
+            - "null"
+        debit:
+          type: number
+          example: 5000.00
+        credit:
+          type: number
+          example: 0
+        description:
+          type:
+            - string
+            - "null"
+
+    JournalEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "je_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+        entryNumber:
+          type:
+            - string
+            - "null"
+          example: "JE-2026-0001"
+        entryDate:
+          type: string
+          format: date
+          description: Date of the journal entry.
+          example: "2026-03-22"
+        period:
+          type:
+            - string
+            - "null"
+          description: Accounting period (YYYY-MM).
+          example: "2026-03"
+        status:
+          $ref: "#/components/schemas/JournalEntryStatus"
+        source:
+          type:
+            - string
+            - "null"
+          enum: [extraction, manual, import, adjustment, opening_balance, closing_entry, bill, invoice, credit_note, depreciation]
+        description:
+          type:
+            - string
+            - "null"
+        memo:
+          type:
+            - string
+            - "null"
+        documentType:
+          type:
+            - string
+            - "null"
+        documentNumber:
+          type:
+            - string
+            - "null"
+        vendorName:
+          type:
+            - string
+            - "null"
+        customerName:
+          type:
+            - string
+            - "null"
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/JournalEntryLine"
+          description: Double-entry lines. Total debits must equal total credits.
+        totalDebit:
+          type: number
+          description: Sum of all debit amounts.
+          example: 5000.00
+        totalCredit:
+          type: number
+          description: Sum of all credit amounts.
+          example: 5000.00
+        isBalanced:
+          type: boolean
+          description: Whether debits equal credits.
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateJournalEntryInput:
+      type: object
+      required: [entryDate, description, lines]
+      properties:
+        entryDate:
+          type: string
+          format: date
+          description: Date of the journal entry (YYYY-MM-DD).
+        description:
+          type: string
+          minLength: 1
+          maxLength: 500
+        lines:
+          type: array
+          minItems: 2
+          description: At least 2 lines required for double-entry bookkeeping.
+          items:
+            type: object
+            required: [accountId, debitAmount, creditAmount]
+            properties:
+              accountId:
+                type: string
+                minLength: 1
+                description: ID of the account in the chart of accounts.
+              debitAmount:
+                type: number
+                minimum: 0
+                maximum: 999999999999.99
+              creditAmount:
+                type: number
+                minimum: 0
+                maximum: 999999999999.99
+              description:
+                type:
+                  - string
+                  - "null"
+                maxLength: 500
+              costCenter:
+                type:
+                  - string
+                  - "null"
+                maxLength: 100
+              project:
+                type:
+                  - string
+                  - "null"
+                maxLength: 100
+              department:
+                type:
+                  - string
+                  - "null"
+                maxLength: 100
+        memo:
+          type:
+            - string
+            - "null"
+          maxLength: 2000
+        currency:
+          type: string
+          minLength: 3
+          maxLength: 3
+          default: MYR
+        documentType:
+          type:
+            - string
+            - "null"
+          maxLength: 100
+        documentNumber:
+          type:
+            - string
+            - "null"
+          maxLength: 100
+        documentDate:
+          type:
+            - string
+            - "null"
+          format: date
+        vendorId:
+          type:
+            - string
+            - "null"
+        vendorName:
+          type:
+            - string
+            - "null"
+          maxLength: 300
+        customerId:
+          type:
+            - string
+            - "null"
+        customerName:
+          type:
+            - string
+            - "null"
+          maxLength: 300
+        source:
+          type: string
+          enum: [manual, adjustment, opening_balance, import]
+          default: manual
+
+    # ── Bank Account ──────────────────────────────────────────────────────────
+
+    BankAccount:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "ba_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+        accountName:
+          type: string
+          example: "CIMB Business Current"
+        accountType:
+          type: string
+          description: Type of bank account (e.g. current, savings, credit_card).
+          example: "current"
+        currency:
+          type: string
+          default: MYR
+        currentBalance:
+          type: number
+          description: Current account balance.
+          example: 125430.50
+        creditLimit:
+          type:
+            - number
+            - "null"
+          description: Credit limit (for credit card accounts).
+        openingBalance:
+          type: number
+          description: Balance when the account was first added to Cynco.
+          example: 100000.00
+        openingBalanceDate:
+          type:
+            - string
+            - "null"
+          format: date
+        lastStatementDate:
+          type:
+            - string
+            - "null"
+          format: date
+        lastReconciledDate:
+          type:
+            - string
+            - "null"
+          format: date
+        displayOrder:
+          type: integer
+          description: Sort order for display in the UI.
+          example: 1
+        notes:
+          type:
+            - string
+            - "null"
+        institution:
+          type:
+            - object
+            - "null"
+          description: Bank institution details.
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            swiftCode:
+              type:
+                - string
+                - "null"
+        isActive:
+          type: boolean
+          default: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    # ── Bank Transaction ──────────────────────────────────────────────────────
+
+    BankTransaction:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "btx_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+        financialAccountId:
+          type: string
+          description: ID of the bank account this transaction belongs to.
+        transactionDate:
+          type:
+            - string
+            - "null"
+          format: date
+        valueDate:
+          type:
+            - string
+            - "null"
+          format: date
+          description: Settlement/value date.
+        rawDescription:
+          type:
+            - string
+            - "null"
+          description: Original bank description.
+        cleanDescription:
+          type:
+            - string
+            - "null"
+          description: Cleaned/normalized description.
+        reference:
+          type:
+            - string
+            - "null"
+          description: Bank reference number.
+        transactionType:
+          type: string
+          enum: [credit, debit]
+        amount:
+          type: number
+          description: Transaction amount (always positive; direction indicated by transactionType).
+          example: 1500.00
+        balanceAfter:
+          type:
+            - number
+            - "null"
+          description: Account balance after this transaction.
+        category:
+          type:
+            - string
+            - "null"
+          description: Transaction category.
+        payeeName:
+          type:
+            - string
+            - "null"
+        status:
+          type:
+            - string
+            - "null"
+          enum: [imported, categorized, posted, reconciled, excluded]
+        matchStatus:
+          type:
+            - string
+            - "null"
+          enum: [unmatched, suggested, matched, reconciled, excluded]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    # ── Report Schemas ────────────────────────────────────────────────────────
+
+    TrialBalance:
+      type: object
+      properties:
+        period:
+          type: string
+          description: Accounting period.
+          example: "2026-03"
+        asOfDate:
+          type: string
+          format: date
+          example: "2026-03-31"
+        balanceType:
+          type: string
+          enum: [preliminary, adjusted, final]
+        totalDebit:
+          type: number
+          example: 150000.00
+        totalCredit:
+          type: number
+          example: 150000.00
+        isBalanced:
+          type: boolean
+          example: true
+        difference:
+          type: number
+          description: Difference between total debits and credits. Should be 0 if balanced.
+          example: 0
+        accountCount:
+          type: integer
+          description: Number of accounts with activity.
+          example: 45
+        lineItems:
+          type: array
+          items:
+            $ref: "#/components/schemas/TrialBalanceLineItem"
+
+    TrialBalanceLineItem:
+      type: object
+      properties:
+        accountId:
+          type: string
+        accountCode:
+          type: string
+        accountName:
+          type: string
+        accountType:
+          type: string
+        normalBalance:
+          type: string
+          enum: [debit, credit]
+        openingBalance:
+          type: number
+        periodDebit:
+          type: number
+        periodCredit:
+          type: number
+        closingBalance:
+          type: number
+        debitBalance:
+          type: number
+        creditBalance:
+          type: number
+        transactionCount:
+          type: integer
+          description: Number of transactions in this period.
+
+    FinancialStatement:
+      type: object
+      description: |
+        Balance sheet or profit & loss report. Contains grouped sections
+        (e.g. assets, liabilities, revenue, expenses) with account-level
+        detail.
+      properties:
+        period:
+          type: string
+          example: "2026-03"
+        asOfDate:
+          type: string
+          format: date
+        reportType:
+          type: string
+          enum: [balance_sheet, profit_loss]
+        sections:
+          type: array
+          items:
+            $ref: "#/components/schemas/StatementSection"
+        totals:
+          type: object
+          additionalProperties:
+            type: number
+          description: Summary totals (e.g. totalAssets, totalLiabilities, netProfit).
+
+    StatementSection:
+      type: object
+      properties:
+        label:
+          type: string
+          description: Section heading.
+          example: "Current Assets"
+        total:
+          type: number
+          example: 250000.00
+        accounts:
+          type: array
+          items:
+            type: object
+            properties:
+              accountId:
+                type: string
+              accountCode:
+                type: string
+              accountName:
+                type: string
+              balance:
+                type: number
+        subsections:
+          type:
+            - array
+            - "null"
+          items:
+            $ref: "#/components/schemas/StatementSection"
+
