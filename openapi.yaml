@@ -107,6 +107,32 @@ info:
     | `item.updated`             | Item updated              |
     | `item.deleted`             | Item deleted              |
 
+    ## Scopes
+
+    API keys carry permission scopes that control which endpoints they can access.
+    Each scope follows a `resource:action` pattern.
+
+    | Scope                    | Grants access to                      |
+    |--------------------------|---------------------------------------|
+    | `invoices:read`          | List and get invoices                 |
+    | `invoices:write`         | Create, update, and batch invoices    |
+    | `customers:read`         | List and get customers                |
+    | `customers:write`        | Create, update, delete customers      |
+    | `vendors:read`           | List and get vendors                  |
+    | `vendors:write`          | Create, update, delete vendors        |
+    | `bills:read`             | List and get bills                    |
+    | `bills:write`            | Update bills                          |
+    | `items:read`             | List and get items                    |
+    | `items:write`            | Update and delete items               |
+    | `accounts:read`          | List and get accounts                 |
+    | `journal_entries:read`   | List and get journal entries           |
+    | `journal_entries:write`  | Create and batch journal entries       |
+    | `bank_accounts:read`     | List and get bank accounts             |
+    | `bank_transactions:read` | List and get bank transactions         |
+    | `reports:read`           | Generate financial reports             |
+    | `webhooks:read`          | List and get webhook endpoints         |
+    | `webhooks:write`         | Create, update, and delete webhooks    |
+
     ## Error Handling
 
     All errors follow a consistent envelope:
@@ -165,6 +191,8 @@ tags:
     description: Read bank transactions.
   - name: Reports
     description: Generate trial balance, balance sheet, and profit & loss reports.
+  - name: Webhooks
+    description: Manage webhook endpoints for event notifications.
 
 # ─── Paths ──────────────────────────────────────────────────────────────────
 
@@ -1299,23 +1327,8 @@ paths:
         - $ref: "#/components/parameters/ResourceId"
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
-        "200":
-          description: Item deleted.
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/SuccessEnvelope"
-                  - type: object
-                    properties:
-                      data:
-                        type: object
-                        properties:
-                          id:
-                            type: string
-                          deleted:
-                            type: boolean
-                            const: true
+        "204":
+          description: Item deleted. No content returned.
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
@@ -1330,12 +1343,16 @@ paths:
       operationId: listAccounts
       summary: List chart of accounts
       description: |
-        Returns all accounts in the tenant's active chart of accounts.
-        If no chart of accounts has been set up, an empty array is returned.
-        This endpoint does not paginate; most tenants have fewer than 200
-        accounts.
+        Returns a paginated list of accounts in the tenant's active chart of
+        accounts. If no chart of accounts has been set up, an empty array is
+        returned. Supports offset and cursor pagination, filtering, and field
+        selection.
       tags: [Accounts]
       parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Fields"
         - name: account_type
           in: query
           description: Filter by account type.
@@ -1361,7 +1378,7 @@ paths:
             default: "true"
       responses:
         "200":
-          description: List of accounts.
+          description: Paginated list of accounts.
           headers:
             X-RateLimit-Limit:
               $ref: "#/components/headers/X-RateLimit-Limit"
@@ -1382,6 +1399,10 @@ paths:
                         type: array
                         items:
                           $ref: "#/components/schemas/Account"
+                      pagination:
+                        $ref: "#/components/schemas/Pagination"
+                      links:
+                        $ref: "#/components/schemas/PaginationLinks"
               example:
                 success: true
                 data:
@@ -1404,6 +1425,18 @@ paths:
                     description: "Cash on hand and in bank accounts"
                     createdAt: "2026-01-01T00:00:00.000Z"
                     updatedAt: "2026-01-01T00:00:00.000Z"
+                pagination:
+                  page: 1
+                  limit: 20
+                  total: 85
+                  totalPages: 5
+                  hasMore: true
+                links:
+                  self: "https://app.cynco.io/api/v1/accounts?page=1&limit=20"
+                  first: "https://app.cynco.io/api/v1/accounts?page=1&limit=20"
+                  next: "https://app.cynco.io/api/v1/accounts?page=2&limit=20"
+                  prev: null
+                  last: "https://app.cynco.io/api/v1/accounts?page=5&limit=20"
                 meta:
                   requestId: "req_01HZXK6YNPQ4JG8BVR0WT9MXCE"
                   apiVersion: v1
@@ -1941,6 +1974,242 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ── Webhooks ─────────────────────────────────────────────────────────────────
+
+  /webhooks:
+    get:
+      operationId: listWebhooks
+      summary: List webhooks
+      description: |
+        Returns a paginated list of webhook endpoints configured for the
+        authenticated tenant.
+      tags: [Webhooks]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Fields"
+      responses:
+        "200":
+          description: Paginated list of webhooks.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Webhook"
+                      pagination:
+                        $ref: "#/components/schemas/Pagination"
+                      links:
+                        $ref: "#/components/schemas/PaginationLinks"
+              example:
+                success: true
+                data:
+                  - id: "whk_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+                    url: "https://example.com/webhooks/cynco"
+                    events:
+                      - invoice.created
+                      - invoice.updated
+                    description: "Invoice notifications"
+                    isActive: true
+                    createdAt: "2026-03-15T08:30:00.000Z"
+                    updatedAt: "2026-03-15T08:30:00.000Z"
+                pagination:
+                  page: 1
+                  limit: 20
+                  total: 3
+                  totalPages: 1
+                  hasMore: false
+                meta:
+                  requestId: "req_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+                  apiVersion: v1
+                  timestamp: "2026-03-22T12:00:00.000Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+    post:
+      operationId: createWebhook
+      summary: Create a webhook
+      description: |
+        Register a new webhook endpoint. The response includes a `secret` field
+        that is used to verify webhook signatures. The secret is only returned
+        once in the creation response — store it securely.
+      tags: [Webhooks]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWebhookInput"
+            example:
+              url: "https://example.com/webhooks/cynco"
+              events:
+                - invoice.created
+                - invoice.updated
+                - customer.created
+              description: "Invoice and customer notifications"
+      responses:
+        "201":
+          description: Webhook created. The `secret` field is included only in this response.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: "#/components/schemas/Webhook"
+                          - type: object
+                            properties:
+                              secret:
+                                type: string
+                                description: |
+                                  HMAC-SHA256 signing secret. Only returned on creation.
+                                  Store this securely — it cannot be retrieved later.
+                                example: "whsec_a1b2c3d4e5f6g7h8i9j0"
+              example:
+                success: true
+                data:
+                  id: "whk_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+                  url: "https://example.com/webhooks/cynco"
+                  events:
+                    - invoice.created
+                    - invoice.updated
+                    - customer.created
+                  description: "Invoice and customer notifications"
+                  isActive: true
+                  secret: "whsec_a1b2c3d4e5f6g7h8i9j0"
+                  createdAt: "2026-03-22T12:00:00.000Z"
+                  updatedAt: "2026-03-22T12:00:00.000Z"
+                meta:
+                  requestId: "req_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+                  apiVersion: v1
+                  timestamp: "2026-03-22T12:00:00.000Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /webhooks/{id}:
+    get:
+      operationId: getWebhook
+      summary: Get a webhook
+      description: Retrieve a single webhook endpoint by ID.
+      tags: [Webhooks]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/Fields"
+      responses:
+        "200":
+          description: Webhook found.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Webhook"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+    patch:
+      operationId: updateWebhook
+      summary: Update a webhook
+      description: |
+        Update an existing webhook endpoint. All fields are optional; only
+        provided fields are changed.
+      tags: [Webhooks]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateWebhookInput"
+            example:
+              events:
+                - invoice.created
+                - invoice.updated
+                - invoice.deleted
+              isActive: false
+      responses:
+        "200":
+          description: Webhook updated.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Webhook"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+    delete:
+      operationId: deleteWebhook
+      summary: Delete a webhook
+      description: Permanently delete a webhook endpoint. Pending deliveries are cancelled.
+      tags: [Webhooks]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "204":
+          description: Webhook deleted. No content returned.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "429":
           $ref: "#/components/responses/RateLimited"
 
@@ -3733,4 +4002,110 @@ components:
             - "null"
           items:
             $ref: "#/components/schemas/StatementSection"
+
+    # ── Webhook Schemas ──────────────────────────────────────────────────────
+
+    WebhookEvent:
+      type: string
+      description: A webhook event type.
+      enum:
+        - invoice.created
+        - invoice.updated
+        - invoice.deleted
+        - customer.created
+        - customer.updated
+        - customer.deleted
+        - vendor.created
+        - vendor.updated
+        - vendor.deleted
+        - bill.created
+        - bill.updated
+        - bill.deleted
+        - journal_entry.created
+        - journal_entry.updated
+        - item.created
+        - item.updated
+        - item.deleted
+
+    Webhook:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique webhook identifier.
+          example: "whk_01HZXK3YNPQ4JG8BVR0WT9MXCE"
+        url:
+          type: string
+          format: uri
+          description: The URL that receives webhook POST requests.
+          example: "https://example.com/webhooks/cynco"
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookEvent"
+          description: List of event types this webhook subscribes to.
+        description:
+          type:
+            - string
+            - "null"
+          description: Optional human-readable label for this webhook.
+          example: "Invoice notifications"
+        isActive:
+          type: boolean
+          description: Whether the webhook is currently receiving events.
+          default: true
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-03-15T08:30:00.000Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2026-03-15T08:30:00.000Z"
+
+    CreateWebhookInput:
+      type: object
+      required: [url, events]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: The URL that will receive webhook POST requests. Must use HTTPS.
+          example: "https://example.com/webhooks/cynco"
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookEvent"
+          minItems: 1
+          description: List of event types to subscribe to.
+        description:
+          type:
+            - string
+            - "null"
+          description: Optional human-readable label for this webhook.
+          maxLength: 500
+
+    UpdateWebhookInput:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+          description: New URL for the webhook endpoint. Must use HTTPS.
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookEvent"
+          minItems: 1
+          description: Replace the list of subscribed event types.
+        description:
+          type:
+            - string
+            - "null"
+          description: Updated human-readable label.
+          maxLength: 500
+        isActive:
+          type: boolean
+          description: Enable or disable the webhook.
 
